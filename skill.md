@@ -368,47 +368,603 @@ private:
 
 ## 剧情编辑器系统
 
-### 1. 对话系统架构
+### 1. 业界成熟方案对比
+
+#### 1.1 开源/商业插件方案
+
+| 方案 | 类型 | 特点 | 适用场景 |
+|-----|------|------|---------|
+| [articy:draft](https://www.articy.com/en/downloads/unreal/) | 商业软件+免费导入插件 | 专业叙事设计工具，可视化流程图，支持 UE5 导入 | 大型项目、专业叙事团队 |
+| [Ink + Inkpot](https://github.com/The-Chinese-Room/Inkpot) | 开源 | Inkle 叙事脚本语言，The Chinese Room 开发的 UE5 插件 | 文字冒险、分支叙事 |
+| [Yarn Spinner](https://yarnspinner.dev/) | 开源 | 简洁的对话脚本语言，支持 UE/Unity/Godot | 独立游戏、快速原型 |
+| [Not Yet: Dialogue System](https://github.com/NotYetGames/DlgSystem) | 开源 | UE 原生节点编辑器，C++/蓝图友好 | 中小型项目 |
+| [Narrative Tales](https://www.fab.com/listings/narrative-tales) | 商业 | 任务+对话一体化，AAA 级编辑器 | RPG、开放世界 |
+| [AINS](https://www.fab.com/listings/0ba9199b-7245-4bd1-b30b-9e6de9f6dfa5) | 商业 | 高级交互与叙事系统，AAA 品质 | 3A 级项目 |
+
+#### 1.2 大厂技术参考（UE 项目）
+
+**鸣潮 (Wuthering Waves) - 库洛游戏**
+- 基于 UE4/5 开发的开放世界二次元游戏
+- 采用 Sequencer 驱动的过场动画系统
+- 对话系统结合立绘+3D 场景混合演出
+- 参考：[Unreal Engine 开发者访谈](https://www.unrealengine.com/en-US/developer-interviews/exploring-the-post-apocalyptic-charm-of-asg-open-worlds-in-wuthering-waves)
+
+**Blue Protocol - Bandai Namco**（已停服，技术参考价值）
+- UE4 开发的动漫风 MMORPG
+- 采用引擎内动画过场 + 视觉小说格式混合
+- 重要对话全配音，次要对话文本框
+
+### 2. 自研剧情编辑器插件架构
+
+#### 2.1 插件模块结构
+```
+/Plugins/StoryEditor
+├── /Source
+│   ├── /StoryEditorRuntime      # 运行时模块
+│   │   ├── StoryEditorRuntime.Build.cs
+│   │   ├── /Public
+│   │   │   ├── StoryAsset.h           # 剧情资产
+│   │   │   ├── DialogueNode.h         # 对话节点
+│   │   │   ├── StoryCondition.h       # 条件系统
+│   │   │   ├── StoryAction.h          # 动作系统
+│   │   │   ├── StoryPlayer.h          # 剧情播放器
+│   │   │   └── StorySubsystem.h       # 剧情子系统
+│   │   └── /Private
+│   │       └── ...
+│   └── /StoryEditorEditor       # 编辑器模块
+│       ├── StoryEditorEditor.Build.cs
+│       ├── /Public
+│       │   ├── StoryGraphEditor.h     # 节点图编辑器
+│       │   ├── StoryGraphSchema.h     # 图表规则
+│       │   ├── StoryEditorCommands.h  # 编辑器命令
+│       │   └── StoryPreviewWidget.h   # 预览窗口
+│       └── /Private
+│           └── ...
+├── /Content
+│   └── /EditorResources         # 编辑器资源
+└── StoryEditor.uplugin
+```
+
+#### 2.2 核心数据结构
 ```cpp
-// 对话节点基类
-UCLASS(BlueprintType, Blueprintable)
-class UDialogueNode : public UObject
+// 剧情资产 - 存储完整剧情数据
+UCLASS(BlueprintType)
+class STORYEDITORRUNTIME_API UStoryAsset : public UPrimaryDataAsset
 {
     GENERATED_BODY()
-public:
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
-    FText SpeakerName;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+public:
+    // 剧情元数据
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story")
+    FText StoryTitle;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Story")
+    FText StoryDescription;
+
+    // 起始节点 GUID
+    UPROPERTY(EditAnywhere, Category = "Story")
+    FGuid StartNodeGuid;
+
+    // 所有节点
+    UPROPERTY(EditAnywhere, Instanced, Category = "Story")
+    TArray<UStoryNodeBase*> Nodes;
+
+    // 剧情变量定义
+    UPROPERTY(EditAnywhere, Category = "Variables")
+    TMap<FName, FStoryVariable> Variables;
+
+    // 角色数据引用
+    UPROPERTY(EditAnywhere, Category = "Characters")
+    TArray<TSoftObjectPtr<UCharacterDataAsset>> Characters;
+
+    // 根据 GUID 查找节点
+    UFUNCTION(BlueprintCallable)
+    UStoryNodeBase* FindNodeByGuid(const FGuid& Guid) const;
+
+    // 获取起始节点
+    UFUNCTION(BlueprintCallable)
+    UStoryNodeBase* GetStartNode() const;
+
+#if WITH_EDITOR
+    virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
+};
+
+// 节点基类
+UCLASS(Abstract, BlueprintType, Blueprintable, EditInlineNew)
+class STORYEDITORRUNTIME_API UStoryNodeBase : public UObject
+{
+    GENERATED_BODY()
+
+public:
+    // 节点唯一标识
+    UPROPERTY(VisibleAnywhere, Category = "Node")
+    FGuid NodeGuid;
+
+    // 编辑器位置
+    UPROPERTY()
+    FVector2D EditorPosition;
+
+    // 输出连接
+    UPROPERTY(EditAnywhere, Category = "Node")
+    TArray<FStoryNodeConnection> OutputConnections;
+
+    // 执行节点逻辑
+    UFUNCTION(BlueprintNativeEvent)
+    FStoryNodeResult Execute(UStoryPlayerComponent* Player);
+
+    // 获取下一个节点
+    UFUNCTION(BlueprintCallable)
+    UStoryNodeBase* GetNextNode(int32 OutputIndex = 0) const;
+};
+
+// 对话节点
+UCLASS(BlueprintType, meta = (DisplayName = "Dialogue"))
+class STORYEDITORRUNTIME_API UDialogueNode : public UStoryNodeBase
+{
+    GENERATED_BODY()
+
+public:
+    // 说话角色
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue")
+    TSoftObjectPtr<UCharacterDataAsset> Speaker;
+
+    // 对话内容（支持本地化）
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue")
     FText DialogueText;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
-    TSoftObjectPtr<UTexture2D> CharacterPortrait;
+    // 语音资源
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue")
+    TSoftObjectPtr<USoundBase> VoiceOver;
+
+    // 表情/动作标签
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue")
+    FName EmotionTag;
+
+    // 立绘变体
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue")
+    FName PortraitVariant;
+
+    // 打字机效果速度
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue")
+    float TypewriterSpeed = 0.05f;
+
+    // 自动播放延迟（0 = 手动点击）
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Dialogue")
+    float AutoAdvanceDelay = 0.0f;
+
+    virtual FStoryNodeResult Execute_Implementation(UStoryPlayerComponent* Player) override;
+};
+
+// 选项节点
+UCLASS(BlueprintType, meta = (DisplayName = "Choice"))
+class STORYEDITORRUNTIME_API UChoiceNode : public UStoryNodeBase
+{
+    GENERATED_BODY()
+
+public:
+    // 选项列表
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Choice")
+    TArray<FDialogueChoice> Choices;
+
+    // 选项显示方式
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Choice")
+    EChoiceDisplayMode DisplayMode = EChoiceDisplayMode::Vertical;
+
+    // 时间限制（0 = 无限制）
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Choice")
+    float TimeLimit = 0.0f;
+
+    // 超时默认选项
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Choice")
+    int32 TimeoutDefaultChoice = 0;
+};
+
+// 选项数据
+USTRUCT(BlueprintType)
+struct FDialogueChoice
+{
+    GENERATED_BODY()
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
-    TArray<UDialogueChoice*> Choices;
+    FText ChoiceText;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
-    TArray<UDialogueCondition*> Conditions;
+    // 显示条件
+    UPROPERTY(EditAnywhere, Instanced)
+    TArray<UStoryCondition*> Conditions;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
-    TArray<UDialogueAction*> Actions;
+    // 选择后执行的动作
+    UPROPERTY(EditAnywhere, Instanced)
+    TArray<UStoryAction*> Actions;
+
+    // 是否已选过（用于显示已读标记）
+    UPROPERTY(BlueprintReadOnly)
+    bool bWasSelected = false;
+};
+
+// 条件基类
+UCLASS(Abstract, BlueprintType, Blueprintable, EditInlineNew)
+class STORYEDITORRUNTIME_API UStoryCondition : public UObject
+{
+    GENERATED_BODY()
+
+public:
+    UPROPERTY(EditAnywhere, Category = "Condition")
+    bool bInvertResult = false;
+
+    UFUNCTION(BlueprintNativeEvent)
+    bool Evaluate(UStoryPlayerComponent* Player) const;
+};
+
+// 变量条件
+UCLASS(meta = (DisplayName = "Variable Condition"))
+class STORYEDITORRUNTIME_API UVariableCondition : public UStoryCondition
+{
+    GENERATED_BODY()
+
+public:
+    UPROPERTY(EditAnywhere)
+    FName VariableName;
+
+    UPROPERTY(EditAnywhere)
+    EComparisonOperator Operator;
+
+    UPROPERTY(EditAnywhere)
+    FStoryVariableValue CompareValue;
+
+    virtual bool Evaluate_Implementation(UStoryPlayerComponent* Player) const override;
+};
+
+// 动作基类
+UCLASS(Abstract, BlueprintType, Blueprintable, EditInlineNew)
+class STORYEDITORRUNTIME_API UStoryAction : public UObject
+{
+    GENERATED_BODY()
+
+public:
+    UFUNCTION(BlueprintNativeEvent)
+    void Execute(UStoryPlayerComponent* Player);
+};
+
+// 设置变量动作
+UCLASS(meta = (DisplayName = "Set Variable"))
+class STORYEDITORRUNTIME_API USetVariableAction : public UStoryAction
+{
+    GENERATED_BODY()
+
+public:
+    UPROPERTY(EditAnywhere)
+    FName VariableName;
+
+    UPROPERTY(EditAnywhere)
+    EVariableOperation Operation;
+
+    UPROPERTY(EditAnywhere)
+    FStoryVariableValue Value;
+
+    virtual void Execute_Implementation(UStoryPlayerComponent* Player) override;
+};
+
+// 播放 Sequencer 动作
+UCLASS(meta = (DisplayName = "Play Sequence"))
+class STORYEDITORRUNTIME_API UPlaySequenceAction : public UStoryAction
+{
+    GENERATED_BODY()
+
+public:
+    UPROPERTY(EditAnywhere)
+    TSoftObjectPtr<ULevelSequence> Sequence;
+
+    UPROPERTY(EditAnywhere)
+    bool bWaitForCompletion = true;
+
+    virtual void Execute_Implementation(UStoryPlayerComponent* Player) override;
 };
 ```
 
-### 2. 剧情编辑器功能
-- 可视化节点编辑器（基于 Graph Editor）
-- 分支对话与条件判断
-- 变量系统与存档集成
-- 本地化支持（多语言）
-- 角色立绘与表情切换
-- 语音集成
-- 剧情预览与调试工具
+#### 2.3 剧情播放器组件
+```cpp
+// 剧情播放器组件 - 挂载到 PlayerController 或专用 Actor
+UCLASS(ClassGroup = (Story), meta = (BlueprintSpawnableComponent))
+class STORYEDITORRUNTIME_API UStoryPlayerComponent : public UActorComponent
+{
+    GENERATED_BODY()
 
-### 3. 剧情数据结构
-- DataAsset 存储剧情数据
-- DataTable 管理角色/物品信息
-- SaveGame 存档系统集成
+public:
+    // 当前播放的剧情
+    UPROPERTY(BlueprintReadOnly, Category = "Story")
+    UStoryAsset* CurrentStory;
+
+    // 当前节点
+    UPROPERTY(BlueprintReadOnly, Category = "Story")
+    UStoryNodeBase* CurrentNode;
+
+    // 剧情变量运行时数据
+    UPROPERTY(BlueprintReadOnly, Category = "Story")
+    TMap<FName, FStoryVariableValue> RuntimeVariables;
+
+    // 委托
+    UPROPERTY(BlueprintAssignable)
+    FOnDialogueStarted OnDialogueStarted;
+
+    UPROPERTY(BlueprintAssignable)
+    FOnDialogueLineDisplayed OnDialogueLineDisplayed;
+
+    UPROPERTY(BlueprintAssignable)
+    FOnChoicesPresented OnChoicesPresented;
+
+    UPROPERTY(BlueprintAssignable)
+    FOnDialogueEnded OnDialogueEnded;
+
+    // 开始剧情
+    UFUNCTION(BlueprintCallable, Category = "Story")
+    void StartStory(UStoryAsset* Story);
+
+    // 继续到下一节点
+    UFUNCTION(BlueprintCallable, Category = "Story")
+    void Continue(int32 ChoiceIndex = 0);
+
+    // 跳转到指定节点
+    UFUNCTION(BlueprintCallable, Category = "Story")
+    void JumpToNode(const FGuid& NodeGuid);
+
+    // 获取/设置变量
+    UFUNCTION(BlueprintCallable, Category = "Story")
+    FStoryVariableValue GetVariable(FName VariableName) const;
+
+    UFUNCTION(BlueprintCallable, Category = "Story")
+    void SetVariable(FName VariableName, FStoryVariableValue Value);
+
+    // 保存/加载剧情进度
+    UFUNCTION(BlueprintCallable, Category = "Story")
+    FStoryProgress SaveProgress() const;
+
+    UFUNCTION(BlueprintCallable, Category = "Story")
+    void LoadProgress(const FStoryProgress& Progress);
+
+private:
+    void ProcessCurrentNode();
+    void ExecuteNodeActions(const TArray<UStoryAction*>& Actions);
+    bool EvaluateConditions(const TArray<UStoryCondition*>& Conditions) const;
+};
+```
+
+#### 2.4 编辑器节点图
+```cpp
+// 剧情图表 Schema - 定义节点连接规则
+UCLASS()
+class STORYEDITOREDITOR_API UStoryGraphSchema : public UEdGraphSchema
+{
+    GENERATED_BODY()
+
+public:
+    // 获取可创建的节点类型
+    virtual void GetGraphContextActions(FGraphContextMenuBuilder& ContextMenuBuilder) const override;
+
+    // 验证连接
+    virtual const FPinConnectionResponse CanCreateConnection(
+        const UEdGraphPin* A, const UEdGraphPin* B) const override;
+
+    // 创建连接
+    virtual bool TryCreateConnection(UEdGraphPin* A, UEdGraphPin* B) const override;
+
+    // 右键菜单
+    virtual void GetContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const override;
+};
+
+// 剧情编辑器节点基类
+UCLASS()
+class STORYEDITOREDITOR_API UStoryGraphNode : public UEdGraphNode
+{
+    GENERATED_BODY()
+
+public:
+    // 关联的运行时节点
+    UPROPERTY()
+    UStoryNodeBase* RuntimeNode;
+
+    // 节点颜色
+    virtual FLinearColor GetNodeTitleColor() const override;
+
+    // 节点标题
+    virtual FText GetNodeTitle(ENodeTitleType::Type TitleType) const override;
+
+    // 创建输入输出引脚
+    virtual void AllocateDefaultPins() override;
+
+    // 编译到运行时节点
+    virtual void CompileToRuntimeNode();
+};
+
+// 对话节点编辑器表示
+UCLASS()
+class STORYEDITOREDITOR_API UStoryGraphNode_Dialogue : public UStoryGraphNode
+{
+    GENERATED_BODY()
+
+public:
+    virtual FLinearColor GetNodeTitleColor() const override
+    {
+        return FLinearColor(0.2f, 0.5f, 0.9f); // 蓝色
+    }
+
+    virtual void AllocateDefaultPins() override;
+
+    // 自定义节点 Widget
+    virtual TSharedPtr<SGraphNode> CreateVisualWidget() override;
+};
+```
+
+#### 2.5 预览与调试系统
+```cpp
+// 剧情预览窗口
+class SStoryPreviewWidget : public SCompoundWidget
+{
+public:
+    SLATE_BEGIN_ARGS(SStoryPreviewWidget) {}
+    SLATE_END_ARGS()
+
+    void Construct(const FArguments& InArgs);
+
+    // 设置预览的剧情
+    void SetStoryAsset(UStoryAsset* InStory);
+
+    // 从指定节点开始预览
+    void PreviewFromNode(UStoryNodeBase* Node);
+
+private:
+    // 模拟的播放器
+    TSharedPtr<UStoryPlayerComponent> PreviewPlayer;
+
+    // UI 元素
+    TSharedPtr<STextBlock> SpeakerNameText;
+    TSharedPtr<STextBlock> DialogueText;
+    TSharedPtr<SVerticalBox> ChoicesBox;
+    TSharedPtr<SImage> PortraitImage;
+
+    void OnDialogueLine(const FDialogueLineData& LineData);
+    void OnChoices(const TArray<FDialogueChoice>& Choices);
+    void OnChoiceSelected(int32 Index);
+};
+
+// 调试器 - 运行时剧情状态查看
+UCLASS()
+class STORYEDITOREDITOR_API UStoryDebugger : public UObject
+{
+    GENERATED_BODY()
+
+public:
+    // 当前监视的播放器
+    UPROPERTY()
+    TWeakObjectPtr<UStoryPlayerComponent> WatchedPlayer;
+
+    // 变量监视列表
+    UPROPERTY()
+    TArray<FName> WatchedVariables;
+
+    // 断点节点
+    UPROPERTY()
+    TSet<FGuid> Breakpoints;
+
+    // 执行历史
+    UPROPERTY()
+    TArray<FStoryExecutionRecord> ExecutionHistory;
+
+    void SetBreakpoint(const FGuid& NodeGuid);
+    void RemoveBreakpoint(const FGuid& NodeGuid);
+    void StepOver();
+    void StepInto();
+    void Continue();
+};
+```
+
+### 3. 与 Sequencer 集成的过场动画系统
+
+```cpp
+// 过场动画管理器 - 协调剧情与 Sequencer
+UCLASS(BlueprintType)
+class STORYEDITORRUNTIME_API UCutsceneManager : public UActorComponent
+{
+    GENERATED_BODY()
+
+public:
+    // 播放过场动画
+    UFUNCTION(BlueprintCallable)
+    void PlayCutscene(ULevelSequence* Sequence, const FCutsceneSettings& Settings);
+
+    // 在过场中插入对话
+    UFUNCTION(BlueprintCallable)
+    void InsertDialogueAtTime(float Time, UDialogueNode* Dialogue);
+
+    // 同步对话与动画
+    UFUNCTION(BlueprintCallable)
+    void SyncDialogueWithAnimation(UStoryAsset* Story, ULevelSequence* Sequence);
+
+    // 委托
+    UPROPERTY(BlueprintAssignable)
+    FOnCutsceneEvent OnCutsceneStarted;
+
+    UPROPERTY(BlueprintAssignable)
+    FOnCutsceneEvent OnCutsceneEnded;
+
+    UPROPERTY(BlueprintAssignable)
+    FOnCutsceneDialogue OnDialogueTriggered;
+
+private:
+    UPROPERTY()
+    ALevelSequenceActor* CurrentSequenceActor;
+
+    void OnSequenceFinished();
+};
+
+// Sequencer 自定义轨道 - 对话轨道
+UCLASS()
+class STORYEDITOREDITOR_API UMovieSceneDialogueTrack : public UMovieSceneNameableTrack
+{
+    GENERATED_BODY()
+
+public:
+    virtual bool SupportsType(TSubclassOf<UMovieSceneSection> SectionClass) const override;
+    virtual UMovieSceneSection* CreateNewSection() override;
+    virtual FName GetTrackName() const override { return TEXT("Dialogue"); }
+};
+
+// 对话 Section
+UCLASS()
+class STORYEDITOREDITOR_API UMovieSceneDialogueSection : public UMovieSceneSection
+{
+    GENERATED_BODY()
+
+public:
+    UPROPERTY(EditAnywhere)
+    TSoftObjectPtr<UDialogueNode> DialogueNode;
+
+    UPROPERTY(EditAnywhere)
+    bool bPauseSequenceForDialogue = true;
+};
+```
+
+### 4. 本地化支持
+
+```cpp
+// 本地化集成
+UCLASS()
+class STORYEDITORRUNTIME_API UStoryLocalizationSubsystem : public UGameInstanceSubsystem
+{
+    GENERATED_BODY()
+
+public:
+    // 获取本地化文本
+    UFUNCTION(BlueprintCallable)
+    FText GetLocalizedDialogue(const FString& DialogueKey) const;
+
+    // 导出所有文本用于翻译
+    UFUNCTION(BlueprintCallable, CallInEditor)
+    void ExportAllDialoguesForLocalization(const FString& OutputPath);
+
+    // 从 CSV/PO 导入翻译
+    UFUNCTION(BlueprintCallable, CallInEditor)
+    void ImportLocalization(const FString& FilePath);
+};
+```
+
+### 5. 推荐工作流
+
+**小型项目（独立游戏）：**
+1. 使用 [Yarn Spinner](https://yarnspinner.dev/) 或 [Ink](https://www.inklestudios.com/ink/) 编写剧本
+2. 通过 Inkpot/Yarn Spinner UE 插件导入
+3. 自定义 UI 展示
+
+**中型项目：**
+1. 使用 [Not Yet: Dialogue System](https://github.com/NotYetGames/DlgSystem)（开源免费）
+2. 或购买 [Narrative Tales](https://www.fab.com/listings/narrative-tales)
+3. 结合 Sequencer 制作过场
+
+**大型项目（AAA 级）：**
+1. 使用 [articy:draft](https://www.articy.com/) 进行专业叙事设计
+2. 自研剧情编辑器插件（参考上述架构）
+3. 深度集成 Sequencer 过场系统
+4. 建立完整的本地化 Pipeline
 
 ## 分镜系统（Storyboard & Sequencer）
 
