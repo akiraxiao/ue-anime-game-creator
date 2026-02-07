@@ -33,13 +33,23 @@ Unreal Engine 二次元游戏开发 AI Skill - 专为 Claude Code / AI 助手设
 ### 剧情编辑器系统
 
 #### 业界方案对比
-| 方案 | 类型 | 适用场景 |
-|-----|------|---------|
-| [articy:draft](https://www.articy.com/) | 商业 | 大型项目、专业叙事团队 |
-| [Ink + Inkpot](https://github.com/The-Chinese-Room/Inkpot) | 开源 | 文字冒险、分支叙事 |
-| [Yarn Spinner](https://yarnspinner.dev/) | 开源 | 独立游戏、快速原型 |
-| [Not Yet: Dialogue System](https://github.com/NotYetGames/DlgSystem) | 开源 | 中小型项目 |
-| [Narrative Tales](https://www.fab.com/) | 商业 | RPG、开放世界 |
+| 方案 | 类型 | 价格 | 适用场景 |
+|-----|------|------|---------|
+| [articy:draft](https://www.articy.com/) | 商业 | 免费版(700对象) / €69.99/年 | 大型项目、专业叙事团队 |
+| [Ink + Inkpot](https://github.com/The-Chinese-Room/Inkpot) | 开源 | 免费 | 文字冒险、分支叙事 |
+| [Yarn Spinner](https://yarnspinner.dev/) | 开源 | 免费 | 独立游戏、快速原型 |
+| [Not Yet: Dialogue System](https://github.com/NotYetGames/DlgSystem) | 开源 | 免费 | 中小型项目 |
+| [Narrative Tales](https://www.fab.com/) | 商业 | 付费 | RPG、开放世界 |
+
+#### articy:draft 集成（推荐大型项目）
+Skill 包含完整的 articy:draft UE 集成指南：
+- 定价方案对比
+- 安装步骤（软件 + UE 插件）
+- 完整工作流程图
+- C++ / 蓝图 API 使用示例
+- ArticyFlowPlayer 组件详解
+- UI 集成示例
+- 本地化支持
 
 #### 自研插件架构
 Skill 包含完整的自研剧情编辑器插件设计：

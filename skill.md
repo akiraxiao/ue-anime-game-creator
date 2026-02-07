@@ -948,7 +948,284 @@ public:
 };
 ```
 
-### 5. 推荐工作流
+### 5. articy:draft 完整集成指南
+
+#### 5.1 定价方案
+| 版本 | 价格 | 限制 |
+|-----|------|------|
+| **免费版** | €0 | 每个项目 700 个对象 |
+| **月订阅** | €6.99/月 | 无限对象 |
+| **年订阅** | €69.99/年 | 无限对象（推荐） |
+
+> 免费版对于小型项目够用，700 个对象可以做不少内容。
+
+#### 5.2 安装步骤
+
+**Step 1: 安装 articy:draft X**
+```
+下载地址：https://www.articy.com/en/downloads/
+支持 Windows 和 macOS
+```
+
+**Step 2: 安装 UE 导入插件**
+```
+方式一：从 Fab 商店安装（推荐）
+  Fab 搜索 "articy:draft X Importer" → 免费下载 → 添加到项目
+
+方式二：从 GitHub 下载源码
+  https://github.com/ArticySoftware/ArticyImporterForUnreal
+  放到项目的 Plugins 目录
+```
+
+**Step 3: 启用插件**
+```
+Edit → Plugins → 搜索 "Articy" → 启用 → 重启编辑器
+```
+
+#### 5.3 工作流程
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  articy:draft X (编写剧情)                                   │
+│  - 创建角色、对话、流程图                                      │
+│  - 设置全局变量和条件                                         │
+│  - 预览和测试分支                                            │
+└─────────────────────┬───────────────────────────────────────┘
+                      ↓
+┌─────────────────────────────────────────────────────────────┐
+│  导出 (File → Export → Unreal Engine)                        │
+│  - 选择导出路径（UE 项目的 Content 目录）                       │
+│  - 生成 .articyue 文件                                       │
+└─────────────────────┬───────────────────────────────────────┘
+                      ↓
+┌─────────────────────────────────────────────────────────────┐
+│  UE 自动导入                                                 │
+│  - 插件自动检测并导入 .articyue 文件                           │
+│  - 生成对应的 DataAsset                                      │
+└─────────────────────┬───────────────────────────────────────┘
+                      ↓
+┌─────────────────────────────────────────────────────────────┐
+│  运行时播放                                                  │
+│  - 使用 ArticyFlowPlayer 组件                                │
+│  - 自定义 UI 显示对话                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 5.4 核心 API 使用
+
+```cpp
+// ========== 1. 获取 Articy 数据库 ==========
+#include "ArticyRuntime/Public/ArticyDatabase.h"
+#include "ArticyRuntime/Public/ArticyGlobalVariables.h"
+#include "ArticyRuntime/Public/ArticyFlowPlayer.h"
+
+// 获取数据库单例
+UArticyDatabase* Database = UArticyDatabase::Get(this);
+
+// ========== 2. 通过 ID 获取对象 ==========
+// 在 articy:draft 中每个对象都有唯一 ID
+FArticyId DialogueId = FArticyId(0x0100000100000001); // 示例 ID
+UArticyObject* Object = Database->GetObject(DialogueId);
+
+// 转换为具体类型
+UArticyDialogueFragment* Fragment = Cast<UArticyDialogueFragment>(Object);
+if (Fragment)
+{
+    FText DialogueText = Fragment->GetText();
+    FText SpeakerName = Fragment->GetSpeaker()->GetDisplayName();
+}
+
+// ========== 3. 全局变量操作 ==========
+UArticyGlobalVariables* GlobalVars = UArticyGlobalVariables::GetDefault(this);
+
+// 读取变量（变量在 articy 中定义，格式为 Namespace.VariableName）
+bool bQuestCompleted = GlobalVars->GetBoolVariable("Quest.MainQuestCompleted");
+int32 PlayerLevel = GlobalVars->GetIntVariable("Player.Level");
+FString PlayerName = GlobalVars->GetStringVariable("Player.Name");
+
+// 设置变量
+GlobalVars->SetBoolVariable("Quest.MainQuestCompleted", true);
+GlobalVars->SetIntVariable("Player.Level", 10);
+
+// ========== 4. Flow Player 组件使用 ==========
+UCLASS()
+class ADialogueActor : public AActor
+{
+    GENERATED_BODY()
+
+public:
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+    UArticyFlowPlayer* FlowPlayer;
+
+    ADialogueActor()
+    {
+        FlowPlayer = CreateDefaultSubobject<UArticyFlowPlayer>(TEXT("FlowPlayer"));
+    }
+
+    virtual void BeginPlay() override
+    {
+        Super::BeginPlay();
+
+        // 绑定事件
+        FlowPlayer->OnPlayerPaused.AddDynamic(this, &ADialogueActor::OnFlowPaused);
+        FlowPlayer->OnBranchesUpdated.AddDynamic(this, &ADialogueActor::OnBranchesUpdated);
+    }
+
+    // 开始对话
+    UFUNCTION(BlueprintCallable)
+    void StartDialogue(UArticyObject* StartNode)
+    {
+        FlowPlayer->SetStartNode(StartNode);
+        FlowPlayer->Play();
+    }
+
+    // 选择分支继续
+    UFUNCTION(BlueprintCallable)
+    void SelectBranch(int32 BranchIndex)
+    {
+        FlowPlayer->Play(BranchIndex);
+    }
+
+private:
+    // 当 Flow 暂停时（遇到对话节点）
+    UFUNCTION()
+    void OnFlowPaused(TScriptInterface<IArticyFlowObject> PausedOn)
+    {
+        UArticyDialogueFragment* Dialogue = Cast<UArticyDialogueFragment>(PausedOn.GetObject());
+        if (Dialogue)
+        {
+            // 显示对话 UI
+            FText Text = Dialogue->GetText();
+            FText Speaker = Dialogue->GetSpeaker() ?
+                Dialogue->GetSpeaker()->GetDisplayName() : FText::GetEmpty();
+
+            // 通知 UI 更新
+            OnDialogueUpdated.Broadcast(Speaker, Text);
+        }
+    }
+
+    // 当有分支选项时
+    UFUNCTION()
+    void OnBranchesUpdated(const TArray<FArticyBranch>& AvailableBranches)
+    {
+        TArray<FText> Choices;
+        for (const FArticyBranch& Branch : AvailableBranches)
+        {
+            // 获取分支文本（如果是对话选项）
+            UArticyDialogueFragment* Fragment = Cast<UArticyDialogueFragment>(Branch.GetTarget());
+            if (Fragment)
+            {
+                Choices.Add(Fragment->GetMenuText());
+            }
+        }
+
+        // 通知 UI 显示选项
+        OnChoicesAvailable.Broadcast(Choices);
+    }
+
+public:
+    UPROPERTY(BlueprintAssignable)
+    FOnDialogueUpdated OnDialogueUpdated;
+
+    UPROPERTY(BlueprintAssignable)
+    FOnChoicesAvailable OnChoicesAvailable;
+};
+```
+
+#### 5.5 蓝图使用方式
+
+```
+1. 添加 ArticyFlowPlayer 组件到 Actor
+
+2. 设置起始节点：
+   - 在 Details 面板设置 Start On 属性
+   - 或通过蓝图调用 Set Start Node
+
+3. 绑定事件：
+   - On Player Paused：对话暂停时触发
+   - On Branches Updated：有选项时触发
+
+4. 控制流程：
+   - Play()：开始/继续播放
+   - Play(BranchIndex)：选择分支继续
+
+5. 获取对话内容：
+   - Get Text：获取对话文本
+   - Get Speaker：获取说话者
+   - Get Menu Text：获取选项文本
+```
+
+#### 5.6 与 UI 集成示例
+
+```cpp
+// 对话 UI Widget
+UCLASS()
+class UDialogueWidget : public UUserWidget
+{
+    GENERATED_BODY()
+
+public:
+    UPROPERTY(meta = (BindWidget))
+    UTextBlock* SpeakerNameText;
+
+    UPROPERTY(meta = (BindWidget))
+    UTextBlock* DialogueText;
+
+    UPROPERTY(meta = (BindWidget))
+    UVerticalBox* ChoicesContainer;
+
+    UPROPERTY(EditDefaultsOnly)
+    TSubclassOf<UUserWidget> ChoiceButtonClass;
+
+    // 显示对话
+    UFUNCTION(BlueprintCallable)
+    void ShowDialogue(const FText& Speaker, const FText& Text)
+    {
+        SpeakerNameText->SetText(Speaker);
+        DialogueText->SetText(Text);
+        ChoicesContainer->ClearChildren();
+    }
+
+    // 显示选项
+    UFUNCTION(BlueprintCallable)
+    void ShowChoices(const TArray<FText>& Choices)
+    {
+        ChoicesContainer->ClearChildren();
+
+        for (int32 i = 0; i < Choices.Num(); i++)
+        {
+            UUserWidget* ChoiceButton = CreateWidget(this, ChoiceButtonClass);
+            // 设置按钮文本和索引...
+            ChoicesContainer->AddChild(ChoiceButton);
+        }
+    }
+};
+```
+
+#### 5.7 本地化支持
+
+articy:draft 原生支持多语言：
+```
+1. 在 articy:draft 中：
+   - Project Settings → Languages → 添加语言
+   - 为每个对话节点填写不同语言版本
+
+2. 导出时：
+   - 所有语言数据会一起导出
+
+3. 在 UE 中切换语言：
+   UArticyDatabase* Database = UArticyDatabase::Get(this);
+   Database->SetLanguage("zh-CN"); // 切换到中文
+   Database->SetLanguage("en");    // 切换到英文
+```
+
+#### 5.8 官方资源
+
+- [articy:draft X 下载](https://www.articy.com/en/downloads/)
+- [UE 导入插件文档](https://www.articy.com/en/importer-for-unreal-tutorial-l1/)
+- [Demo 项目 (Maniac Manfred)](https://www.articy.com/en/downloads/unreal/) - 包含完整示例
+
+### 6. 推荐工作流
 
 **小型项目（独立游戏）：**
 1. 使用 [Yarn Spinner](https://yarnspinner.dev/) 或 [Ink](https://www.inklestudios.com/ink/) 编写剧本
@@ -961,7 +1238,7 @@ public:
 3. 结合 Sequencer 制作过场
 
 **大型项目（AAA 级）：**
-1. 使用 [articy:draft](https://www.articy.com/) 进行专业叙事设计
+1. 使用 [articy:draft](https://www.articy.com/) 进行专业叙事设计（参考上述集成指南）
 2. 自研剧情编辑器插件（参考上述架构）
 3. 深度集成 Sequencer 过场系统
 4. 建立完整的本地化 Pipeline
